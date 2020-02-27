@@ -28,7 +28,6 @@
     "onCommand:codeQLDatabases.chooseDatabase",
     "onCommand:codeQLDatabases.setCurrentDatabase",
     "onCommand:codeQL.quickQuery",
-    "onCommand:codeQL.restartQueryServer",
     "onWebviewPanel:resultsView",
     "onFileSystem:codeql-zip-archive"
   ],
@@ -207,10 +206,6 @@
       {
         "command": "codeQLQueryHistory.setLabel",
         "title": "Set Label"
-      },
-      {
-        "command": "codeQL.restartQueryServer",
-        "title": "CodeQL: Restart Query Server"
       }
     ],
     "menus": {
