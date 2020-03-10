@@ -5,9 +5,9 @@ import * as Keys from '../result-keys';
 import { LocationStyle } from 'semmle-bqrs';
 import * as octicons from './octicons';
 import { className, renderLocation, ResultTableProps, zebraStripe, selectableZebraStripe, jumpToLocation, nextSortDirection } from './result-table-utils';
-import { PathTableResultSet, onNavigation, NavigationEvent, vscode } from './results';
+import { onNavigation, NavigationEvent, vscode } from './results';
 import { parseSarifPlainTextMessage, parseSarifLocation } from '../sarif-utils';
-import { InterpretedResultsSortColumn, SortDirection, InterpretedResultsSortState } from '../interface-types';
+import { InterpretedResultsSortColumn, SortDirection, InterpretedResultsSortState, PathTableResultSet } from '../interface-types';
 
 export type PathTableProps = ResultTableProps & { resultSet: PathTableResultSet };
 export interface PathTableState {
@@ -80,7 +80,7 @@ export class PathTable extends React.Component<PathTableProps, PathTableState> {
     </thead>;
 
     const rows: JSX.Element[] = [];
-    const { numTruncatedResults, sourceLocationPrefix } = resultSet;
+    const { sourceLocationPrefix } = resultSet;
 
     function renderRelatedLocations(msg: string, relatedLocations: Sarif.Location[]): JSX.Element[] {
       const relatedLocationsById: { [k: string]: Sarif.Location } = {};
@@ -160,8 +160,9 @@ export class PathTable extends React.Component<PathTableProps, PathTableState> {
 
     let expansionIndex = 0;
 
-    if (resultSet.sarif.runs.length === 0) return noResults;
-    if (resultSet.sarif.runs[0].results === undefined) return noResults;
+    if (!resultSet.sarif.runs?.[0]?.results) {
+      return noResults;
+    }
 
     resultSet.sarif.runs[0].results.forEach((result, resultIndex) => {
       const text = result.message.text || '[no text]';
@@ -256,12 +257,6 @@ export class PathTable extends React.Component<PathTableProps, PathTableState> {
 
       }
     });
-
-    if (numTruncatedResults > 0) {
-      rows.push(<tr><td colSpan={5} style={{ textAlign: 'center', fontStyle: 'italic' }}>
-        Too many results to show at once. {numTruncatedResults} result(s) omitted.
-      </td></tr>);
-    }
 
     return <table className={className}>
       {header}

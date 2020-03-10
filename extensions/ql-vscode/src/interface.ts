@@ -1,21 +1,60 @@
 import * as crypto from 'crypto';
 import * as path from 'path';
+import * as fs from 'fs-extra';
 import * as Sarif from 'sarif';
-import { FivePartLocation, LocationStyle, LocationValue, ResolvableLocationValue, tryGetResolvableLocation, WholeFileLocation } from 'semmle-bqrs';
-import { DisposableObject } from 'semmle-vscode-utils';
+import * as bqrs from 'semmle-bqrs';
 import * as vscode from 'vscode';
-import { Diagnostic, DiagnosticRelatedInformation, DiagnosticSeverity, languages, Location, Range, Uri, window as Window, workspace } from 'vscode';
+import {
+  Diagnostic,
+  DiagnosticRelatedInformation,
+  DiagnosticSeverity,
+  languages,
+  Location,
+  Range,
+  Uri,
+  window as Window,
+  workspace
+} from "vscode";
+
+import {
+  FivePartLocation,
+  LocationStyle,
+  LocationValue,
+  ResolvableLocationValue,
+  tryGetResolvableLocation,
+  WholeFileLocation,
+  PrimitiveColumnValue,
+  PrimitiveTypeKind,
+  ElementBase
+} from "semmle-bqrs";
+import { DisposableObject } from 'semmle-vscode-utils';
+
 import * as cli from './cli';
 import { CodeQLCliServer } from './cli';
 import { DatabaseItem, DatabaseManager } from './databases';
 import { showAndLogErrorMessage } from './helpers';
 import { assertNever } from './helpers-pure';
-import { FromResultsViewMsg, Interpretation, INTERPRETED_RESULTS_PER_RUN_LIMIT, IntoResultsViewMsg, QueryMetadata, ResultsPaths, SortedResultSetInfo, SortedResultsMap, InterpretedResultsSortState, SortDirection } from './interface-types';
+import * as helpers from './helpers';
+import {
+  FromResultsViewMsg,
+  Interpretation,
+  IntoResultsViewMsg,
+  QueryMetadata,
+  ResultsPaths,
+  SortedResultSetInfo,
+  SortedResultsMap,
+  InterpretedResultsSortState,
+  ResultsInfo,
+  ResultSet,
+  ResultRow,
+  ResultValue
+} from './interface-types';
 import { Logger } from './logging';
 import * as messages from './messages';
 import { CompletedQuery, interpretResults } from './query-results';
 import { QueryInfo, tmpDir } from './run-queries';
 import { parseSarifLocation, parseSarifPlainTextMessage } from './sarif-utils';
+import { ReadStream } from 'fs';
 
 /**
  * interface.ts
@@ -90,28 +129,6 @@ export function webviewUriToFileUri(webviewUri: string): Uri {
   return Uri.file(path);
 }
 
-function sortMultiplier(sortDirection: SortDirection): number {
-  switch (sortDirection) {
-    case SortDirection.asc: return 1;
-    case SortDirection.desc: return -1;
-  }
-}
-
-function sortInterpretedResults(results: Sarif.Result[], sortState: InterpretedResultsSortState | undefined): void {
-  if (sortState !== undefined) {
-    const multiplier = sortMultiplier(sortState.sortDirection);
-    switch (sortState.sortBy) {
-      case 'alert-message':
-        results.sort((a, b) =>
-          a.message.text === undefined ? 0 :
-            b.message.text === undefined ? 0 :
-              multiplier * (a.message.text?.localeCompare(b.message.text)));
-        break;
-      default:
-        assertNever(sortState.sortBy);
-    }
-  }
-}
 
 export class InterfaceManager extends DisposableObject {
   private _displayedQuery?: CompletedQuery;
@@ -233,9 +250,7 @@ export class InterfaceManager extends DisposableObject {
           } catch (e) {
             if (e instanceof Error) {
               if (e.message.match(/File not found/)) {
-                vscode.window.showErrorMessage(
-                  `Original file of this result is not in the database's source archive.`
-                );
+                helpers.showAndLogErrorMessage(`Original file of this result is not in the database's source archive.`);
               } else {
                 this.logger.log(
                   `Unable to handleMsgFromView: ${e.message}`
@@ -364,7 +379,7 @@ export class InterfaceManager extends DisposableObject {
     }
 
     await this.postMessage({
-      t: "setState",
+      t: 'setState',
       interpretation,
       origResultsPaths: results.query.resultsPaths,
       resultsPath: this.convertPathToWebviewUri(
@@ -390,31 +405,9 @@ export class InterfaceManager extends DisposableObject {
       resultsPaths.resultsPath,
       sourceInfo
     );
-    // For performance reasons, limit the number of results we try
-    // to serialize and send to the webview. TODO: possibly also
-    // limit number of paths per result, number of steps per path,
-    // or throw an error if we are in aggregate trying to send
-    // massively too much data, as it can make the extension
-    // unresponsive.
-
-    let numTruncatedResults = 0;
-    sarif.runs.forEach(run => {
-      if (run.results !== undefined) {
-        sortInterpretedResults(run.results, sortState);
-        if (run.results.length > INTERPRETED_RESULTS_PER_RUN_LIMIT) {
-          numTruncatedResults +=
-            run.results.length - INTERPRETED_RESULTS_PER_RUN_LIMIT;
-          run.results = run.results.slice(
-            0,
-            INTERPRETED_RESULTS_PER_RUN_LIMIT
-          );
-        }
-      }
-    });
     return {
       sarif,
       sourceLocationPrefix,
-      numTruncatedResults,
       sortState
     };
   }
@@ -694,5 +687,98 @@ function tryResolveLocation(loc: LocationValue | undefined,
       return resolveWholeFileLocation(resolvableLoc, databaseItem);
     default:
       return undefined;
+  }
+}
+
+
+//////////////////////////////////////////
+// TODO: move to better place
+
+async function getResultSets(resultsInfo: ResultsInfo): Promise<readonly ResultSet[]> {
+  const unsortedResponse = await fs.createReadStream(resultsInfo.resultsPath);
+  const unsortedResultSets = await parseResultSets(unsortedResponse);
+  return Promise.all(unsortedResultSets.map(async unsortedResultSet => {
+    const sortedResultSetInfo = resultsInfo.sortedResultsMap.get(unsortedResultSet.schema.name);
+    if (sortedResultSetInfo === undefined) {
+      return unsortedResultSet;
+    }
+    const response = await fs.createReadStream(sortedResultSetInfo.resultsPath);
+    const resultSets = await parseResultSets(response);
+    if (resultSets.length != 1) {
+      throw new Error(`Expected sorted BQRS to contain a single result set, encountered ${resultSets.length} result sets.`);
+    }
+    return resultSets[0];
+  }));
+}
+
+async function parseResultSets(response: fs.ReadStream): Promise<readonly ResultSet[]> {
+  const chunks = getChunkIterator(response);
+
+  const resultSets: ResultSet[] = [];
+
+  await bqrs.parse(chunks, (resultSetSchema) => {
+    const columnTypes = resultSetSchema.columns.map((column) => column.type);
+    const rows: ResultRow[] = [];
+    resultSets.push({
+      t: 'RawResultSet',
+      schema: resultSetSchema,
+      rows: rows
+    });
+
+    return (tuple) => {
+      const row: ResultValue[] = [];
+      tuple.forEach((value, index) => {
+        const type = columnTypes[index];
+        if (type.type === 'e') {
+          const element = value as ElementBase;
+          const label = (element.label !== undefined) ? element.label : element.id.toString(); //REVIEW: URLs?
+          const resolvableLocation = tryGetResolvableLocation(element.location);
+          if (resolvableLocation !== undefined) {
+            row.push({
+              label: label,
+              location: resolvableLocation
+            });
+          }
+          else {
+            // No location link.
+            row.push(label);
+          }
+        }
+        else {
+          row.push(translatePrimitiveValue(value as PrimitiveColumnValue, type.type));
+        }
+      });
+
+      rows.push(row);
+    };
+  });
+
+  return resultSets;
+}
+
+async function* getChunkIterator(response: ReadStream): AsyncIterableIterator<Uint8Array> {
+  while (true) {
+    const { value, done } = await response.read();
+    if (done) {
+      return;
+    }
+    yield value!;
+  }
+}
+
+function translatePrimitiveValue(value: PrimitiveColumnValue, type: PrimitiveTypeKind): ResultValue {
+
+  switch (type) {
+    case 'i':
+    case 'f':
+    case 's':
+    case 'd':
+    case 'b':
+      return value.toString();
+
+    case 'u':
+      return {
+        uri: value as string
+      };
   }
 }

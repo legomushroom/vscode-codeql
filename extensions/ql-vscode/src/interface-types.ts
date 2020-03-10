@@ -1,5 +1,5 @@
 import * as sarif from 'sarif';
-import { ResolvableLocationValue } from 'semmle-bqrs';
+import { ResolvableLocationValue, ResultSetSchema, LocationValue } from 'semmle-bqrs';
 
 /**
  * Only ever show this many results per run in interpreted results.
@@ -33,7 +33,6 @@ export interface PreviousExecution {
 
 export interface Interpretation {
   sourceLocationPrefix: string;
-  numTruncatedResults: number;
   /**
    * sortState being undefined means don't sort, just present results in the order
    * they appear in the sarif file.
@@ -94,7 +93,7 @@ export type FromResultsViewMsg =
   | ToggleDiagnostics
   | ChangeRawResultsSortMsg
   | ChangeInterpretedResultsSortMsg
-  | ResultViewLoaded;
+  | ResultViewLoadedMsg;
 
 interface ViewSourceFileMsg {
   t: 'viewSourceFile';
@@ -111,7 +110,7 @@ interface ToggleDiagnostics {
   kind?: string;
 }
 
-interface ResultViewLoaded {
+interface ResultViewLoadedMsg {
   t: 'resultViewLoaded';
 }
 
@@ -150,3 +149,62 @@ interface ChangeInterpretedResultsSortMsg {
    */
   sortState?: InterpretedResultsSortState;
 }
+
+// TODO: These are all brought from the webview. Some of these might be better off going back there
+
+export interface ResultsInfo {
+  resultsPath: string;
+  origResultsPaths: ResultsPaths;
+  database: DatabaseInfo;
+  interpretation: Interpretation | undefined;
+  sortedResultsMap: Map<string, SortedResultSetInfo>;
+  /**
+   * See {@link SetStateMsg.shouldKeepOldResultsWhileRendering}.
+   */
+  shouldKeepOldResultsWhileRendering: boolean;
+  metadata?: QueryMetadata;
+}
+
+export interface ResultsViewState {
+  displayedResults: ResultsState;
+  nextResultsInfo: ResultsInfo | null;
+  isExpectingResultsUpdate: boolean;
+}
+
+export interface ResultsState {
+  // We use `null` instead of `undefined` here because in React, `undefined` is
+  // used to mean "did not change" when updating the state of a component.
+  resultsInfo: ResultsInfo | null;
+  results: Results | null;
+  errorMessage: string;
+}
+
+export interface Results {
+  resultSets: readonly ResultSet[];
+  sortStates: Map<string, RawResultsSortState>;
+  database: DatabaseInfo;
+}
+
+export type RawTableResultSet = { t: 'RawResultSet' } & RawResultSet;
+export type PathTableResultSet = { t: 'SarifResultSet'; readonly schema: ResultSetSchema; name: string } & Interpretation;
+
+export type ResultSet =
+  | RawTableResultSet
+  | PathTableResultSet;
+
+export interface RawResultSet {
+  readonly schema: ResultSetSchema;
+  readonly rows: readonly ResultRow[];
+}
+export interface ResultElement {
+  label: string;
+  location?: LocationValue;
+}
+
+export interface ResultUri {
+  uri: string;
+}
+
+export type ResultValue = ResultElement | ResultUri | string;
+
+export type ResultRow = ResultValue[];
