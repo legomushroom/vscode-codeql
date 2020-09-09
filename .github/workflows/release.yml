@@ -17,6 +17,8 @@ on:
     # - Test event: this file is modified on a branch in the main repo containing `/actions/` in the name.
     branches:
       - '**/actions/**'
+
+  pull_request:
     paths:
       - '**/workflows/release.yml'
 
@@ -84,9 +86,22 @@ jobs:
           draft: true
           prerelease: false
 
+      # Determine if the remaining steps should run.
+      # They should only run if this workflow was invoked by a tag push
+      - name: Check if release
+        id: checkRelease
+        if: success()
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+        run: |
+          if [ $EVENT_NAME == "push" ] && [[ $REF == refs/tags/v* ]]; then
+            echo "::set-output name=is_release::true"
+          fi
+
       - name: Upload release asset
         uses: actions/upload-release-asset@v1.0.1
-        if: success()
+        if: success() && steps.checkRelease.is_release == 'true'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
@@ -100,13 +115,14 @@ jobs:
       # The checkout action does not fetch the main branch.
       # Fetch the main branch so that we can base the version bump PR against main.
       - name: Fetch main branch
+        if: success() && steps.checkRelease.is_release == 'true'
         run: |
           git fetch --depth=1 origin main:main
           git checkout main
 
       - name: Bump patch version
         id: bump-patch-version
-        if: success()
+        if: success() && steps.checkRelease.is_release == 'true'
         run: |
           cd extensions/ql-vscode
           # Bump to the next patch version. Major or minor version bumps will have to be done manually.
@@ -115,14 +131,14 @@ jobs:
           echo "::set-output name=next_version::$NEXT_VERSION"
 
       - name: Add changelog for next release
-        if: success()
+        if: success() && steps.checkRelease.is_release == 'true'
         run: |
           cd extensions/ql-vscode
           perl -i -pe 's/^/## \[UNRELEASED\]\n\n/ if($.==3)' CHANGELOG.md
 
       - name: Create version bump PR
         uses: peter-evans/create-pull-request@c7b64af0a489eae91f7890f2c1b63d13cc2d8ab7 # v2.4.2
-        if: success()
+        if: success() && steps.checkRelease.is_release == 'true'
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           commit-message: Bump version to ${{ steps.bump-patch-version.outputs.next_version }}
