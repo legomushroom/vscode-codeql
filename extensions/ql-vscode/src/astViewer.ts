@@ -37,7 +37,7 @@ class AstViewerDataProvider implements vscode.TreeDataProvider<AstItem | RootAst
   }
 
   refresh(): void {
-    this._onDidChangeTreeData.fire();
+    this._onDidChangeTreeData.fire(void 0);
   }
   getChildren(item?: AstItem): vscode.ProviderResult<(AstItem | RootAstItem)[]> {
     const children = item ? item.children : this.roots;
