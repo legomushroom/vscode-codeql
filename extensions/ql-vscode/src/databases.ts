@@ -521,10 +521,17 @@ export class DatabaseManager extends DisposableObject {
           // we're doing this.
           vscode.window.showInformationMessage(`Adding workspace folder for source archive of database ${item.name}.`);
         }
-        vscode.workspace.updateWorkspaceFolders(end, 0, {
+
+        const { workspace } = vscode;
+
+        workspace.updateWorkspaceFolders(0, null, {
           name: `[${item.name} source archive]`,
           uri,
         });
+        // vscode.workspace.updateWorkspaceFolders(end, 0, {
+        //   name: `[${item.name} source archive]`,
+        //   uri,
+        // });
         // vscode api documentation says we must to wait for this event
         // between multiple `updateWorkspaceFolders` calls.
         await eventFired(vscode.workspace.onDidChangeWorkspaceFolders);
